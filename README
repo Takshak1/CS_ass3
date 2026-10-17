@@ -1,0 +1,39 @@
+CS612 Assignment 3: Cache Lab
+
+Read ASSIGNMENT.pdf first. It has the full specification, the grading
+scheme, and the report you must submit.
+
+You modify and submit two files:
+  csim.c        Part A: your cache simulator
+  trans.c       Part B: your cache-friendly transpose
+
+Build everything (requires gcc, make, python3, valgrind):
+  linux> make
+
+Check Part A (your simulator against the reference simulator):
+  linux> ./test-csim
+
+Check Part B (correctness and misses of every registered transpose):
+  linux> ./test-trans -M 48 -N 48
+  linux> ./test-trans -M 48 -N 64
+  linux> ./test-trans -M 59 -N 73
+
+Check everything at once (this is the same program the course staff (Madhav or I) use to grade your work):
+  linux> ./driver.py
+
+See which accesses of transpose function i hit and miss:
+  linux> ./csim-ref -v -s 5 -E 1 -b 5 -t trace.f<i>
+
+Prepare your submission (three files, prefixed with your roll number):
+  linux> make submit ROLL=<your roll number>
+
+Other files (do not modify):
+  Makefile        Builds the simulator and the tools
+  cachelab.c/.h   Helper functions, including printSummary()
+  bin/            Reference simulator binaries (x86-64 and ARM64);
+                  make copies the right one to ./csim-ref
+  test-csim.c     Compares csim with csim-ref on the graded test cases
+  test-trans.c    Measures the misses of your transpose functions
+  tracegen.c      Helper used by test-trans
+  driver.py       Runs all tests and prints your autograded score
+  traces/         Trace files used by test-csim
