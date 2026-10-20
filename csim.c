@@ -1,8 +1,8 @@
 /*
  * csim.c - CS612 Assignment 3, Part A: a cache simulator.
  *
- * Name:        <your name>
- * Roll number: <your roll number>
+ * Name:        <Prateek Takshak>
+ * Roll number: <23110256>
  *
  * Replace this comment with a short description of your design: how you
  * store the sets and lines, how you choose the LRU victim, and how you track

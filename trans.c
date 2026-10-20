@@ -1,8 +1,8 @@
 /*
  * trans.c - CS612 Assignment 3, Part B: matrix transpose B = A^T
  *
- * Name:        <your name>
- * Roll number: <your roll number>
+ * Name:        <Prateek Takshak>
+ * Roll number: <23110256>
  *
  * Each transpose function must have a prototype of the form:
  *     void trans(int M, int N, int A[N][M], int B[M][N]);
