@@ -45,6 +45,7 @@
 #include <stdio.h>
 #include "cachelab.h"
 
+/* Prototypes, so functions can be used before they are defined. */
 int is_transpose(int M, int N, int A[N][M], int B[M][N]);
 void trans_48x48(int M, int N, int A[N][M], int B[M][N]);
 void trans_48x64(int M, int N, int A[N][M], int B[M][N]);
@@ -62,6 +63,7 @@ void trans_quad_v1(int M, int N, int A[N][M], int B[M][N]);
 char transpose_submit_desc[] = "Transpose submission";
 void transpose_submit(int M, int N, int A[N][M], int B[M][N])
 {
+    /* Each graded size gets the strategy that suits its row collisions. */
     if (M == 48 && N == 48)
         trans_48x48(M, N, A, B);
     else if (M == 48 && N == 64)
@@ -82,10 +84,14 @@ void trans_48x48(int M, int N, int A[N][M], int B[M][N])
     for (ii = 0; ii < N; ii += 8) {
         for (jj = 0; jj < M; jj += 8) {
             for (i = ii; i < ii + 8; i++) {
+                /* Read the whole row segment first (one A line) ... */
                 a0 = A[i][jj];     a1 = A[i][jj + 1];
                 a2 = A[i][jj + 2]; a3 = A[i][jj + 3];
                 a4 = A[i][jj + 4]; a5 = A[i][jj + 5];
                 a6 = A[i][jj + 6]; a7 = A[i][jj + 7];
+                /* ... then write it down column i of B. On a diagonal
+                   tile a B write may evict this A line, but it is no
+                   longer needed. */
                 B[jj][i]     = a0; B[jj + 1][i] = a1;
                 B[jj + 2][i] = a2; B[jj + 3][i] = a3;
                 B[jj + 4][i] = a4; B[jj + 5][i] = a5;
@@ -216,14 +222,18 @@ void trans_blocked(int M, int N, int A[N][M], int B[M][N], int size)
 }
 
 /*
- * trans_blocked_rect - Tiles of rows x cols elements of A. 6 int locals
- *     (the two size parameters are parameters, not locals).
+ * trans_blocked_rect - Tiles of rows x cols elements of A, one element at
+ *     a time. Tile columns are the outer loop, so a strip of B rows stays
+ *     cached while every row tile of A is copied into it. The bounds
+ *     checks handle sizes that are not a multiple of the tile.
+ *     5 int locals (rows and cols are parameters, not locals).
  */
 void trans_blocked_rect(int M, int N, int A[N][M], int B[M][N],
                         int rows, int cols)
 {
     int ii, jj, i, j, tmp;
 
+    /* (ii, jj) is the top-left corner of the current tile of A. */
     for (jj = 0; jj < M; jj += cols) {
         for (ii = 0; ii < N; ii += rows) {
             for (i = ii; i < ii + rows && i < N; i++) {
@@ -238,12 +248,15 @@ void trans_blocked_rect(int M, int N, int A[N][M], int B[M][N],
 
 /*
  * trans_bands - Bands of `height` rows of A, each walked one column at a
- *     time. 4 int locals.
+ *     time. With height 13 for 59x73, the band's A lines never collide, so
+ *     they stay cached across columns, and each column of the band is a
+ *     contiguous run in one row of B. 4 int locals (height is a parameter).
  */
 void trans_bands(int M, int N, int A[N][M], int B[M][N], int height)
 {
     int ii, i, j, tmp;
 
+    /* ii is the first row of the band, j the column being copied. */
     for (ii = 0; ii < N; ii += height) {
         for (j = 0; j < M; j++) {
             for (i = ii; i < ii + height && i < N; i++) {
@@ -260,24 +273,39 @@ void trans_bands(int M, int N, int A[N][M], int B[M][N], int height)
  * registered function under a single 300 second alarm; uncomment the
  * lines in registerFunctions() to reproduce the numbers.
  */
+/*
+ * Misses measured with test-trans are given as 48x48 / 48x64 / 59x73.
+ */
+
+/* trans_blk8 - Square 8x8 tiles. 778 / 3544 / 2741. */
 char trans_blk8_desc[] = "Blocked 8x8";
 void trans_blk8(int M, int N, int A[N][M], int B[M][N])
 {
     trans_blocked(M, N, A, B, 8);
 }
 
+/*
+ * trans_blk16 - Square 16x16 tiles. 836 / 3544 / 4645. Worst at 59x73,
+ *     where a 16-row tile contains A rows 13 apart, which collide.
+ */
 char trans_blk16_desc[] = "Blocked 16x16";
 void trans_blk16(int M, int N, int A[N][M], int B[M][N])
 {
     trans_blocked(M, N, A, B, 16);
 }
 
+/* trans_blk4 - Square 4x4 tiles. 1054 / 1378 / 2382. */
 char trans_blk4_desc[] = "Blocked 4x4";
 void trans_blk4(int M, int N, int A[N][M], int B[M][N])
 {
     trans_blocked(M, N, A, B, 4);
 }
 
+/*
+ * trans_rows8 - The 48x48 scheme applied to any size that allows it.
+ *     648 / 3460 / 2741. Fails at 48x64, where the 8 B rows of a tile
+ *     share only 4 sets.
+ */
 char trans_rows8_desc[] = "8x8 tiles, row copied through 8 locals";
 void trans_rows8(int M, int N, int A[N][M], int B[M][N])
 {
@@ -287,6 +315,10 @@ void trans_rows8(int M, int N, int A[N][M], int B[M][N])
         trans_blocked(M, N, A, B, 8);
 }
 
+/*
+ * trans_quad - First version of the 48x64 quadrant scheme.
+ *     722 / 928 / 2741.
+ */
 char trans_quad_desc[] = "Quadrants v1 (parked row read first)";
 void trans_quad(int M, int N, int A[N][M], int B[M][N])
 {
@@ -296,6 +328,10 @@ void trans_quad(int M, int N, int A[N][M], int B[M][N])
         trans_blocked(M, N, A, B, 8);
 }
 
+/*
+ * trans_quad2 - Final 48x64 quadrant scheme, A column read before the
+ *     parked B row. 696 / 878 / 2741.
+ */
 char trans_quad2_desc[] = "Quadrants v2 (A column read first)";
 void trans_quad2(int M, int N, int A[N][M], int B[M][N])
 {
@@ -305,18 +341,27 @@ void trans_quad2(int M, int N, int A[N][M], int B[M][N])
         trans_blocked(M, N, A, B, 8);
 }
 
+/*
+ * trans_strip4 - 16 x 4 tiles, the first 59x73 submission.
+ *     1054 / 1378 / 2382.
+ */
 char trans_strip4_desc[] = "Column strips 4 wide";
 void trans_strip4(int M, int N, int A[N][M], int B[M][N])
 {
     trans_blocked_rect(M, N, A, B, 16, 4);
 }
 
+/* trans_band8 - Bands of 8 rows. 778 / 1015 / 2055. */
 char trans_band8_desc[] = "Bands of 8 rows, column by column";
 void trans_band8(int M, int N, int A[N][M], int B[M][N])
 {
     trans_bands(M, N, A, B, 8);
 }
 
+/*
+ * trans_band13 - Bands of 13 rows, the final 59x73 strategy.
+ *     987 / 1319 / 1928.
+ */
 char trans_band13_desc[] = "Bands of 13 rows, column by column";
 void trans_band13(int M, int N, int A[N][M], int B[M][N])
 {
