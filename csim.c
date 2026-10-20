@@ -26,6 +26,7 @@
  * B to dirty_bytes_in_cache. An M is replayed as a load then a store to
  * the same address, so its second access always hits.
  */
+
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,32 +34,34 @@
 
 #include "cachelab.h"
 
+// One line of the cache.
 typedef struct {
-    unsigned long tag;
-    unsigned long last_used;
-    int valid;
-    int dirty;
+    unsigned long tag;          // the high bits of the address
+    unsigned long last_used;    // counter value when this line was last used
+    int valid;                  // 1 if this line holds a block
+    int dirty;                  // 1 if this block was written to
 } cache_line_t;
 
-/* Cache geometry, fixed once the arguments are parsed. */
+// The cache and its size. These are set once, after reading the arguments.
 static cache_line_t *cache;
-static unsigned long set_mask;      /* 2^s - 1, so 0 when s = 0 */
-static unsigned long block_size;    /* B = 2^b */
-static long num_sets;               /* S = 2^s */
-static int num_lines;               /* E */
-static int s_bits;
-static int b_bits;
-static int verbose;
+static unsigned long set_mask;      // 2^s - 1 (this is 0 when s = 0)
+static unsigned long block_size;    // B = 2^b bytes per block
+static long num_sets;               // S = 2^s sets
+static int num_lines;               // E lines per set
+static int s_bits;                  // s from the command line
+static int b_bits;                  // b from the command line
+static int verbose;                 // 1 if -v was given
 
-/* Statistics reported by printSummary(). */
+// The numbers we report at the end.
 static long hits;
 static long misses;
-static long evictions;
-static long dirty_evicted;
+static long evictions;              // how many full lines were thrown out
+static long dirty_evicted;          // bytes written back from dirty lines
 
-/* Ticks once per access; the value stamped into a line is its last use. */
+// Goes up by one on every access. Used to find the least recently used line.
 static unsigned long tick;
 
+// Print how to use the program. Same text as csim-ref.
 static void usage(const char *prog)
 {
     printf("Usage: %s [-hv] -s <s> -E <E> -b <b> -t <tracefile>\n", prog);
@@ -74,22 +77,19 @@ static void usage(const char *prog)
     printf("  linux>  %s -v -s 6 -E 8 -b 6 -t traces/mm.trace\n", prog);
 }
 
-/*
- * access_data - Replay one data access. is_store is 1 for a store, which
- * leaves the line dirty, and 0 for a load.
- */
+// Do one memory access. is_store is 1 for a store and 0 for a load.
 static void access_data(unsigned long addr, int is_store)
 {
     unsigned long tag = addr >> (s_bits + b_bits);
     unsigned long set = (addr >> b_bits) & set_mask;
     unsigned long oldest;
-    long base = (long)set * num_lines;
+    long base = (long)set * num_lines;   // where this set starts in the array
     int i;
     int victim;
 
     tick++;
 
-    /* Hit: a valid line in this set whose tag matches. */
+    // Hit: is the block already in this set?
     for (i = 0; i < num_lines; i++) {
         if (cache[base + i].valid && cache[base + i].tag == tag) {
             hits++;
@@ -102,11 +102,12 @@ static void access_data(unsigned long addr, int is_store)
         }
     }
 
-    /* Miss: bring the block in, for loads and stores alike. */
+    // Miss: we have to bring the block in (for loads and stores both).
     misses++;
     if (verbose)
         printf(" miss");
 
+    // First try to find an empty line in the set.
     victim = -1;
     for (i = 0; i < num_lines; i++) {
         if (!cache[base + i].valid) {
@@ -116,7 +117,7 @@ static void access_data(unsigned long addr, int is_store)
     }
 
     if (victim < 0) {
-        /* The set is full, so replace its least recently used line. */
+        // No empty line, so throw out the one used longest ago.
         victim = 0;
         oldest = cache[base].last_used;
         for (i = 1; i < num_lines; i++) {
@@ -128,6 +129,7 @@ static void access_data(unsigned long addr, int is_store)
         evictions++;
         if (verbose)
             printf(" eviction");
+        // If it was written to, its data has to go back to memory.
         if (cache[base + victim].dirty) {
             dirty_evicted += (long)block_size;
             if (verbose)
@@ -135,16 +137,16 @@ static void access_data(unsigned long addr, int is_store)
         }
     }
 
+    // Put the new block in the chosen line.
     cache[base + victim].valid = 1;
     cache[base + victim].tag = tag;
     cache[base + victim].dirty = is_store;
     cache[base + victim].last_used = tick;
 }
 
-/*
- * replay - Read the trace and feed every L, S and M line to access_data().
- * I lines do not start with a space and are skipped, as is the size field.
- */
+// Read the trace file line by line and run each L, S and M access.
+// I lines (instruction fetches) are skipped. The size field is ignored.
+// Returns 1 if it worked, 0 if the file could not be opened.
 static int replay(const char *path)
 {
     char line[256];
@@ -160,7 +162,7 @@ static int replay(const char *path)
 
     while (fgets(line, sizeof(line), fp) != NULL) {
         if (line[0] != ' ')
-            continue;   /* instruction fetch, or a line lackey added */
+            continue;   // I lines do not start with a space, so skip them
         if (sscanf(line, " %c %lx,%d", &op, &addr, &size) != 3)
             continue;
         if (op != 'L' && op != 'S' && op != 'M')
@@ -169,10 +171,10 @@ static int replay(const char *path)
         if (verbose)
             printf("%c %lx,%d", op, addr, size);
 
-        /* L and M both start with a load; S is a store. */
+        // L and M start with a load. S is a store.
         access_data(addr, op == 'S');
         if (op == 'M')
-            access_data(addr, 1);   /* the store half of a modify */
+            access_data(addr, 1);   // the store part of M
 
         if (verbose)
             printf("\n");
@@ -182,6 +184,8 @@ static int replay(const char *path)
     return 1;
 }
 
+// Read the arguments, build the cache, run the trace, and print the results.
+// Returns 0 if all went well, 1 if something was wrong.
 int main(int argc, char *argv[])
 {
     const char *trace_path = NULL;
@@ -189,6 +193,7 @@ int main(int argc, char *argv[])
     long i;
     int opt;
 
+    // Start at -1 so we can tell if an argument was not given.
     s_bits = -1;
     b_bits = -1;
     num_lines = -1;
@@ -224,15 +229,19 @@ int main(int argc, char *argv[])
         usage(argv[0]);
         return 1;
     }
+    // We shift the address by s + b, and a 64-bit number can only be
+    // shifted by up to 63.
     if (s_bits + b_bits > 63) {
         fprintf(stderr, "%s: s + b must be at most 63\n", argv[0]);
         return 1;
     }
 
+    // Work out S, B and the mask for the set bits.
     num_sets = 1L << s_bits;
     block_size = 1UL << b_bits;
     set_mask = (s_bits == 0) ? 0UL : ((1UL << s_bits) - 1UL);
 
+    // Make the cache. calloc sets everything to 0, so all lines start empty.
     cache = calloc((size_t)num_sets * num_lines, sizeof(cache_line_t));
     if (!cache) {
         fprintf(stderr, "%s: cannot allocate a cache of %ld sets x %d lines\n",
@@ -245,7 +254,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Every line left valid and dirty still owes B bytes to memory. */
+    // Count the bytes in lines that are still dirty at the end.
     for (i = 0; i < num_sets * num_lines; i++)
         if (cache[i].valid && cache[i].dirty)
             dirty_in_cache += (long)block_size;
@@ -254,3 +263,4 @@ int main(int argc, char *argv[])
     free(cache);
     return 0;
 }
+
